@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Chữ Ký Số Doanh Nghiệp</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- THƯ VIỆN ĐÓNG DẤU PDF -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    
+    <!-- THÊM: THƯ VIỆN ĐỂ HIỂN THỊ FILE PDF LÊN MÀN HÌNH -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js"></script>
+
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .card-header { font-weight: bold; border-radius: 12px 12px 0 0 !important; }
+        #signatureCanvas { border: 2px dashed #0d6efd; background-color: #fff; border-radius: 8px; cursor: crosshair; }
+        textarea { font-family: monospace; font-size: 12px; background-color: #f8f9fa; }
+        .hidden { display: none !important; }
+        .img-signature { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 8px; background: #fff; padding: 5px; }
+        
+        /* Giao diện khung chọn vị trí ký */
+        #pdfPreviewWrapper { border: 2px solid #6c757d; background: #fff; overflow: auto; max-height: 400px; border-radius: 8px;}
+        #pdfCanvas { cursor: crosshair; display: block; margin: 0 auto; box-shadow: 0px 0px 5px rgba(0,0,0,0.3); }
+        #signatureMarker { position: absolute; border: 2px dashed red; background: rgba(255, 0, 0, 0.15); width: 120px; height: 60px; pointer-events: none; }
+    </style>
+</head>
+<body class="p-4">
+
+<div class="container-fluid">
+    <h2 class="text-center mb-4 text-primary fw-bold">PHẦN MỀM KÝ DUYỆT ĐIỆN TỬ</h2>
+
+    <div class="row">
+        <!-- CỘT 1: ĐĂNG NHẬP / HỒ SƠ -->
+        <div class="col-md-3" id="authSection">
+            <div class="card">
+                <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span id="authTitle">🔑 Đăng Nhập</span>
+                    <button class="btn btn-sm btn-outline-light" id="toggleAuthBtn" onclick="toggleAuthMode()">Đăng ký</button>
+                </div>
+                <div class="card-body">
+                    <label>Mã nhân viên:</label>
+                    <input type="text" id="username" class="form-control mb-2" placeholder="Ví dụ: NV001">
+                    <label>Mật khẩu:</label>
+                    <input type="password" id="password" class="form-control mb-3" placeholder="Nhập mật khẩu...">
+                    
+                    <div id="canvasContainer" class="hidden mb-3">
+                        <label class="text-danger fw-bold">Vẽ chữ ký của bạn:</label><br>
+                        <canvas id="signatureCanvas" width="100%" height="150" style="width: 100%;"></canvas>
+                        <button class="btn btn-sm btn-secondary w-100 mt-1" onclick="clearCanvas()">Xóa vẽ lại</button>
+                    </div>
+
+                    <button id="authSubmitBtn" class="btn btn-primary w-100 fw-bold" onclick="handleAuth()">Đăng Nhập</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3 hidden" id="profileSection">
+            <div class="card border-primary">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <span>👤 Hồ Sơ Nhân Viên</span>
+                    <button class="btn btn-sm btn-danger" onclick="logout()">Đăng Xuất</button>
+                </div>
+                <div class="card-body text-center">
+                    <h5 class="text-primary fw-bold" id="displayUsername">NV001</h5>
+                    <hr>
+                    <label class="fw-bold">Chữ ký tay của bạn:</label><br>
+                    <img id="displaySignatureImg" class="img-signature mb-3" src="" alt="Chưa có chữ ký">
+                    <label class="fw-bold text-start w-100">Khóa Công Khai (Public Key):</label>
+                    <textarea id="displayPubKey" class="form-control" rows="3" readonly></textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- CỘT 2: KÝ VĂN BẢN (KHU VỰC TRUNG TÂM RỘNG HƠN ĐỂ XEM FILE) -->
+        <div class="col-md-6 hidden" id="signSection">
+            <div class="card">
+                <div class="card-header bg-success text-white">✍️ Thực Hiện Ký Số & Chọn Vị Trí</div>
+                <div class="card-body">
+                    <label class="fw-bold text-danger">BƯỚC 1: Chọn văn bản cần ký (PDF)</label>
+                    <input type="file" id="signFile" accept=".pdf" class="form-control mb-2">
+                    
+                    <!-- VÙNG HIỂN THỊ FILE PDF ĐỂ CLICK CHỌN -->
+                    <div id="pdfPreviewWrapper" class="position-relative hidden mb-3 p-2 bg-light">
+                        <div class="alert alert-info text-center p-2 mb-2 fw-bold">
+                            👇 HÃY CLICK CHUỘT VÀO VỊ TRÍ BẠN MUỐN ĐẶT CHỮ KÝ 👇
+                        </div>
+                        <div class="position-relative d-inline-block" style="width: 100%;">
+                            <canvas id="pdfCanvas"></canvas>
+                            <!-- Cái khung đỏ này sẽ nhảy tới tọa độ bạn click -->
+                            <div id="signatureMarker" class="hidden"></div>
+                        </div>
+                    </div>
+
+                    <label class="fw-bold text-danger mt-2">BƯỚC 2: Nhập mật khẩu và Ký</label>
+                    <input type="password" id="confirmPassword" class="form-control mb-3" placeholder="Nhập lại mật khẩu để dùng Khóa Bí Mật...">
+                    
+                    <button class="btn btn-success w-100 fw-bold mb-3" onclick="signDocument()">Xác Nhận Ký Văn Bản</button>
+                    
+                    <button id="downloadBtn" class="btn btn-warning w-100 fw-bold mb-3 hidden" onclick="downloadSignedPDF()">
+                        ⬇️ TẢI VĂN BẢN ĐÃ KÝ VỀ MÁY
+                    </button>
+
+                    <label>Chữ ký số RSA:</label>
+                    <textarea id="signatureResult" class="form-control text-success fw-bold" rows="2" readonly></textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- CỘT 3: XÁC MINH -->
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-header bg-info text-dark fw-bold">🔍 Xác Minh Tính Toàn Vẹn</div>
+                <div class="card-body">
+                    <label>File đã ký:</label>
+                    <input type="file" id="verifyFile" class="form-control mb-2">
+                    <label>Chữ ký RSA:</label>
+                    <textarea id="inputSignature" class="form-control mb-2" rows="2"></textarea>
+                    <label>Public Key:</label>
+                    <textarea id="inputPubKey" class="form-control mb-3" rows="2"></textarea>
+                    <button class="btn btn-info w-100 fw-bold" onclick="verifyDocument()">Kiểm Tra</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const API_URL = 'http://localhost:5000/api';
+    let isRegisterMode = false;
+    let loggedInUser = null; 
+    let signedPdfBytes = null; 
+    let originalFileName = "";
+
+    // ---------------------------------
+    // CÀI ĐẶT THƯ VIỆN HIỂN THỊ PDF VÀ LƯU TỌA ĐỘ
+    // ---------------------------------
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
+    let signX = 50; // Tọa độ mặc định
+    let signY = 50; 
+    let hasClicked = false; // Cờ kiểm tra người dùng đã chọn vị trí chưa
+
+    // Lắng nghe sự kiện người dùng chọn file PDF
+    document.getElementById('signFile').addEventListener('change', async function(e) {
+        const file = e.target.files[0];
+        if (!file || file.type !== "application/pdf") return;
+        
+        // Hiện khung Preview
+        document.getElementById('pdfPreviewWrapper').classList.remove('hidden');
+        document.getElementById('signatureMarker').classList.add('hidden'); // Ẩn khung đỏ đi trước
+        hasClicked = false;
+
+        // Đọc và render PDF lên Canvas
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+        const page = await pdf.getPage(1); // Mặc định cho ký ở Trang 1
+        
+        const viewport = page.getViewport({scale: 1.0}); // Scale 1:1 chuẩn
+        const canvas = document.getElementById('pdfCanvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        await page.render({canvasContext: context, viewport: viewport}).promise;
+    });
+
+    // Bắt sự kiện Click chuột lên tờ giấy PDF để lấy tọa độ
+    document.getElementById('pdfCanvas').addEventListener('click', function(e) {
+        const rect = this.getBoundingClientRect();
+        
+        // Lấy tọa độ Click chính xác trên tỷ lệ thật của canvas
+        const scaleX = this.width / rect.width;
+        const scaleY = this.height / rect.height;
+
+        signX = (e.clientX - rect.left) * scaleX;
+        signY = (e.clientY - rect.top) * scaleY;
+        hasClicked = true;
+
+        // Hiển thị khung nét đứt màu đỏ để báo hiệu
+        const marker = document.getElementById('signatureMarker');
+        marker.style.left = (e.clientX - rect.left) + 'px';
+        marker.style.top = (e.clientY - rect.top) + 'px';
+        marker.classList.remove('hidden');
+    });
+
+    // ---------------------------------
+    // LOGIC VẼ CHỮ KÝ (CANVAS GÓC TRÁI)
+    // ---------------------------------
+    const canvas = document.getElementById('signatureCanvas');
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+    ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.strokeStyle = '#00008B'; 
+
+    canvas.addEventListener('mousedown', (e) => { isDrawing = true; ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY); });
+    canvas.addEventListener('mousemove', (e) => { if (isDrawing) { ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke(); } });
+    canvas.addEventListener('mouseup', () => isDrawing = false);
+    canvas.addEventListener('mouseout', () => isDrawing = false);
+    function clearCanvas() { ctx.clearRect(0, 0, canvas.width, canvas.height); }
+
+    // ---------------------------------
+    // UI & API
+    // ---------------------------------
+    function toggleAuthMode() {
+        isRegisterMode = !isRegisterMode;
+        document.getElementById('authTitle').innerText = isRegisterMode ? '📝 Đăng Ký' : '🔑 Đăng Nhập';
+        document.getElementById('toggleAuthBtn').innerText = isRegisterMode ? 'Đăng nhập' : 'Đăng ký';
+        document.getElementById('authSubmitBtn').innerText = isRegisterMode ? 'Đăng Ký & Tạo Chữ Ký' : 'Đăng Nhập';
+        document.getElementById('authSubmitBtn').className = isRegisterMode ? 'btn btn-warning w-100 fw-bold' : 'btn btn-primary w-100 fw-bold';
+        if(isRegisterMode) document.getElementById('canvasContainer').classList.remove('hidden');
+        else document.getElementById('canvasContainer').classList.add('hidden');
+    }
+
+    function showDashboard(username, signatureImage, publicKey) {
+        document.getElementById('authSection').classList.add('hidden');
+        document.getElementById('profileSection').classList.remove('hidden');
+        document.getElementById('signSection').classList.remove('hidden');
+        document.getElementById('displayUsername').innerText = "Xin chào, " + username;
+        document.getElementById('displaySignatureImg').src = signatureImage;
+        document.getElementById('displayPubKey').value = publicKey;
+        // Fix kích thước canvas cho đúng với div chứa
+        canvas.width = document.getElementById('canvasContainer').offsetWidth; 
+    }
+
+    function logout() {
+        loggedInUser = null;
+        signedPdfBytes = null;
+        document.getElementById('authSection').classList.remove('hidden');
+        document.getElementById('profileSection').classList.add('hidden');
+        document.getElementById('signSection').classList.add('hidden');
+        document.getElementById('downloadBtn').classList.add('hidden'); 
+        document.getElementById('pdfPreviewWrapper').classList.add('hidden');
+        document.getElementById('username').value = '';
+        document.getElementById('password').value = '';
+        document.getElementById('confirmPassword').value = '';
+        document.getElementById('signatureResult').value = '';
+        clearCanvas();
+        if(isRegisterMode) toggleAuthMode();
+    }
+
+    async function handleAuth() {
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        if (!username || !password) return alert("Vui lòng nhập đủ thông tin!");
+
+        if (isRegisterMode) {
+            const signatureImage = canvas.toDataURL('image/png'); 
+            try {
+                const res = await fetch(`${API_URL}/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, signatureImage })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    alert("Đăng ký thành công! Hãy bấm 'Đăng Nhập' để vào hệ thống.");
+                    toggleAuthMode();
+                } else alert("Lỗi: " + data.message);
+            } catch(e) { alert("Lỗi kết nối Server!"); }
+
+        } else {
+            try {
+                const res = await fetch(`${API_URL}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if(data.success) {
+                    loggedInUser = username;
+                    showDashboard(username, data.signatureImage, data.publicKey);
+                } else alert("Lỗi: " + data.message);
+            } catch(e) { alert("Lỗi kết nối Server!"); }
+        }
+    }
+
+    async function signDocument() {
+        const file = document.getElementById('signFile').files[0];
+        const confirmPassword = document.getElementById('confirmPassword').value;
+        
+        if(!file || !confirmPassword) return alert("Vui lòng chọn file và xác nhận mật khẩu!");
+        if(file.type !== "application/pdf") return alert("Hệ thống chỉ hỗ trợ file PDF!");
+        if(!hasClicked) return alert("BẠN CHƯA CHỌN VỊ TRÍ KÝ! Hãy click chuột vào một điểm trên tờ giấy PDF trước khi Ký.");
+
+        originalFileName = file.name;
+
+        const formData = new FormData();
+        formData.append('document', file);
+        formData.append('username', loggedInUser);
+        formData.append('password', confirmPassword);
+
+        try {
+            const res = await fetch(`${API_URL}/sign`, { method: 'POST', body: formData });
+            const data = await res.json();
+            
+            if(data.success) {
+                document.getElementById('signatureResult').value = data.signature;
+                
+                try {
+                    await stampSignatureOnPDF(file, data.signatureImage, data.signature);
+                    document.getElementById('downloadBtn').classList.remove('hidden');
+                    alert("✅ Ký số thành công! Đã đóng dấu vào đúng tọa độ bạn chọn.");
+                } catch (pdfError) {
+                    alert("⚠️ Máy chủ đã ký RSA thành công, nhưng trình duyệt LỖI ĐÓNG DẤU! File có thể bị khóa bảo mật.");
+                }
+            } else alert("❌ Lỗi Server: " + data.message);
+        } catch(e) { alert("Lỗi kết nối Server!"); }
+    }
+
+    // ---------------------------------
+    // HÀM ĐÓNG DẤU THEO TỌA ĐỘ NGƯỜI DÙNG CLICK
+    // ---------------------------------
+    async function stampSignatureOnPDF(file, signatureImageBase64, digitalSignatureCode) {
+        const arrayBuffer = await file.arrayBuffer();
+        const { PDFDocument, rgb } = PDFLib;
+        const pdfDoc = await PDFDocument.load(arrayBuffer);
+
+        const imageResponse = await fetch(signatureImageBase64);
+        const imageBytes = await imageResponse.arrayBuffer();
+        const img = await pdfDoc.embedPng(imageBytes);
+        
+        // Cố định kích thước ảnh chữ ký đóng vào (Rộng 120, Cao 60)
+        const imgWidth = 120;
+        const imgHeight = 60;
+
+        const pages = pdfDoc.getPages();
+        const targetPage = pages[0]; // Đóng dấu lên trang 1
+        
+        // TOÁN HỌC QUY ĐỔI TỌA ĐỘ
+        // Web đếm từ trên xuống dưới. Thư viện PDF-lib đếm từ DƯỚI LÊN TRÊN.
+        // Phải trừ đi chiều cao của trang và chiều cao của chính bức ảnh
+        const pdfY = targetPage.getHeight() - signY - imgHeight;
+        const pdfX = signX;
+
+        targetPage.drawImage(img, {
+            x: pdfX,
+            y: pdfY,
+            width: imgWidth,
+            height: imgHeight,
+        });
+
+        targetPage.drawText(`Ky xac nhan boi: ${loggedInUser}`, { 
+            x: pdfX, 
+            y: pdfY - 15, 
+            size: 10, 
+            color: rgb(0, 0.4, 0)
+        });
+
+        signedPdfBytes = await pdfDoc.save();
+    }
+
+    function downloadSignedPDF() {
+        if (!signedPdfBytes) return;
+        const blob = new Blob([signedPdfBytes], { type: "application/pdf" });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = "Da_Ky_" + originalFileName;
+        link.click();
+    }
+
+    async function verifyDocument() {
+        const file = document.getElementById('verifyFile').files[0];
+        const signature = document.getElementById('inputSignature').value;
+        const pubKey = document.getElementById('inputPubKey').value;
+        if(!file || !signature || !pubKey) return alert("Vui lòng điền đủ File, Chữ ký và Khóa công khai!");
+
+        const formData = new FormData();
+        formData.append('document', file);
+        formData.append('signature', signature);
+        formData.append('publicKey', pubKey);
+
+        try {
+            const res = await fetch(`${API_URL}/verify`, { method: 'POST', body: formData });
+            const data = await res.json();
+            if(data.success) {
+                if(data.isValid) alert("✅ HỢP LỆ! Văn bản nguyên vẹn và chữ ký chính xác.");
+                else alert("❌ CẢNH BÁO: Chữ ký sai hoặc văn bản đã bị sửa đổi!");
+            } else alert("Lỗi: " + data.message);
+        } catch(e) { alert("Lỗi kết nối Server!"); }
+    }
+</script>
+
+</body>
+</html>
